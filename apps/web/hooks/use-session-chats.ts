@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import type { Chat } from "@/lib/db/schema";
-import { fetcher } from "@/lib/swr";
+import { fetcherNoStore } from "@/lib/swr";
 
 export type SessionChatListItem = Chat & {
   hasUnread: boolean;
@@ -34,7 +34,10 @@ type ChatOptimisticOverlay = {
   streaming?: StreamingOverlay;
 };
 
-const STREAMING_RACE_GRACE_MS = 12_000;
+// Keep the optimistic streaming badge briefly to cover client/server handoff,
+// but clear quickly when the server never confirms streaming (fast turns,
+// route switches, aborts) so the sidebar indicator doesn't linger.
+const STREAMING_RACE_GRACE_MS = 4_000;
 const OVERLAY_INACTIVE_TTL_MS = 5 * 60_000;
 const STREAMING_REFRESH_INTERVAL_MS = 1_000;
 const IDLE_REFRESH_INTERVAL_MS = 8_000;
@@ -102,6 +105,13 @@ export function useSessionChats(
   options?: UseSessionChatsOptions,
 ) {
   const [_overlayVersion, setOverlayVersion] = useState(0);
+  const lastNonEmptyChatsRef = useRef<{
+    sessionId: string | null;
+    chats: SessionChatListItem[];
+  }>({
+    sessionId: null,
+    chats: [],
+  });
   const optimisticOverlay = useMemo(
     () => (sessionId ? getSessionOverlay(sessionId) : null),
     [sessionId],
@@ -131,9 +141,13 @@ export function useSessionChats(
 
   const { data, error, isLoading, mutate } = useSWR<ChatsResponse>(
     sessionId ? `/api/sessions/${sessionId}/chats` : null,
-    fetcher,
+    fetcherNoStore,
     {
       fallbackData,
+      // We already render server-prefetched chats in the layout; avoid an
+      // immediate mount revalidation clobbering hydration with stale client
+      // cache/network responses. Focus/polling still keeps the list fresh.
+      revalidateOnMount: fallbackData ? false : undefined,
       refreshInterval: (latestData) => {
         const hasStreamingChat =
           latestData?.chats.some((chat) => chat.isStreaming) ?? false;
@@ -195,7 +209,7 @@ export function useSessionChats(
     [optimisticOverlay, sessionId],
   );
 
-  const chats = (data?.chats ?? []).map((chat) => {
+  const mergedChats = (data?.chats ?? []).map((chat) => {
     const overlay = optimisticOverlay?.get(chat.id);
     if (!overlay) {
       return chat;
@@ -210,6 +224,31 @@ export function useSessionChats(
     }
     return next;
   });
+
+  useEffect(() => {
+    if (!sessionId) {
+      lastNonEmptyChatsRef.current = {
+        sessionId: null,
+        chats: [],
+      };
+      return;
+    }
+
+    if (mergedChats.length > 0) {
+      lastNonEmptyChatsRef.current = {
+        sessionId,
+        chats: mergedChats,
+      };
+    }
+  }, [sessionId, mergedChats]);
+
+  const chats =
+    mergedChats.length === 0 &&
+    sessionId !== null &&
+    lastNonEmptyChatsRef.current.sessionId === sessionId &&
+    lastNonEmptyChatsRef.current.chats.length > 0
+      ? lastNonEmptyChatsRef.current.chats
+      : mergedChats;
 
   useEffect(() => {
     if (!data || !optimisticOverlay || !sessionId) {
