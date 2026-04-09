@@ -98,6 +98,7 @@ import {
   isChatInFlight as isChatInFlightStatus,
   isGitDataPart,
   shouldKeepCollapsedReasoningStreaming,
+  shouldRenderGitDataPart,
   shouldShowThinkingIndicator,
 } from "@/lib/chat-streaming-state";
 import { ACCEPT_IMAGE_TYPES, isValidImageType } from "@/lib/image-utils";
@@ -228,7 +229,7 @@ function getReasoningGroupText(parts: ReasoningMessagePart[]): string {
     .join("\n\n");
 }
 
-function _GitDataPartCard({
+function GitDataPartCard({
   part,
 }: {
   part: WebAgentCommitDataPart | WebAgentPrDataPart;
@@ -2576,7 +2577,7 @@ export function SessionChatContent({
     prDeploymentUrl,
   ]);
 
-  const _isDeploymentStale = branchPreviewUrlChangeBaseline !== undefined;
+  const isDeploymentStale = branchPreviewUrlChangeBaseline !== undefined;
 
   // When auto-commit lands (transitions from committing to clean), mark the
   // current preview deployment as stale so the UI shows "Deploying…" until
@@ -2615,29 +2616,6 @@ export function SessionChatContent({
   const hasOpenPr = hasExistingPr && session.prStatus === "open";
   const _canMergeAndArchive = hasOpenPr && !showCommitAction && !isArchived;
   const _canCloseAndArchive = hasOpenPr && !isArchived;
-  const _openExistingPr = () => {
-    if (!existingPrUrl) {
-      return;
-    }
-
-    window.open(existingPrUrl, "_blank", "noopener,noreferrer");
-  };
-  const _openPreviewOrPr = () => {
-    const targetUrl = prDeploymentUrl ?? existingPrUrl;
-    if (!targetUrl) {
-      return;
-    }
-
-    window.open(targetUrl, "_blank", "noopener,noreferrer");
-  };
-  const _openBuildingDeployment = () => {
-    if (!buildingDeploymentUrl) {
-      return;
-    }
-
-    window.open(buildingDeploymentUrl, "_blank", "noopener,noreferrer");
-  };
-
   const handleCommitted = useCallback(async () => {
     if (hasExistingPr || hasBranchPreviewLookup) {
       setBranchPreviewUrlChangeBaseline(prDeploymentUrl);
@@ -2729,6 +2707,9 @@ export function SessionChatContent({
       hasRepo={hasRepo}
       hasExistingPr={hasExistingPr}
       existingPrUrl={existingPrUrl}
+      prDeploymentUrl={prDeploymentUrl}
+      buildingDeploymentUrl={buildingDeploymentUrl}
+      isDeploymentStale={isDeploymentStale}
       hasUncommittedGitChanges={hasUncommittedGitChanges}
       supportsRepoCreation={supportsRepoCreation}
       hasDiff={Boolean(diff || session.cachedDiff)}
@@ -2776,17 +2757,17 @@ export function SessionChatContent({
       {panelPortalRef.current &&
         createPortal(gitPanelElement, panelPortalRef.current)}
 
-      {/* Dev server / code editor buttons portaled to header */}
+      {/* Header actions portaled from chat-level state */}
       {headerActionsRef.current &&
         canRunDevServer &&
         createPortal(
-          <>
+          <div className="flex items-center gap-1">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-7 w-7"
+                  className="hidden h-7 w-7 sm:inline-flex"
                   onClick={() => void codeEditor.handleOpen()}
                   disabled={
                     codeEditor.state.status === "starting" ||
@@ -2804,8 +2785,7 @@ export function SessionChatContent({
                 {codeEditor.menuLabel}
               </TooltipContent>
             </Tooltip>
-            {/* Dev server — fixed h-7 wrapper prevents layout shift */}
-            <div className="flex h-7 items-center">
+            <div className="hidden h-7 items-center sm:flex">
               {devServer.state.status === "ready" ? (
                 <div className="flex items-center rounded-md border border-border px-0.5">
                   <Tooltip>
@@ -2876,7 +2856,7 @@ export function SessionChatContent({
                 </Tooltip>
               )}
             </div>
-          </>,
+          </div>,
           headerActionsRef.current,
         )}
       <div className="flex h-full flex-col overflow-hidden">
@@ -3221,6 +3201,21 @@ export function SessionChatContent({
                                           })
                                         }
                                       />
+                                    </div>
+                                  );
+                                }
+
+                                if (isGitDataPart(p)) {
+                                  if (!shouldRenderGitDataPart(p)) {
+                                    return null;
+                                  }
+
+                                  return (
+                                    <div
+                                      key={`${m.id}-${group.renderKey}`}
+                                      className="max-w-full"
+                                    >
+                                      <GitDataPartCard part={p} />
                                     </div>
                                   );
                                 }
